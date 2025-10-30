@@ -97,6 +97,19 @@ export default function PredictionDetailPage() {
     }
   }, [params.id]);
 
+  // 将当前查看的事件写入最近浏览（供热门页侧边栏展示）
+  useEffect(() => {
+    if (!prediction) return;
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('recent_events') : null;
+      const arr = raw ? JSON.parse(raw) : [];
+      const item = { id: prediction.id, title: prediction.title, category: prediction.category, seen_at: new Date().toISOString() };
+      const dedup = Array.isArray(arr) ? arr.filter((x: any) => Number(x?.id) !== Number(prediction.id)) : [];
+      const next = [item, ...dedup].slice(0, 10);
+      window.localStorage.setItem('recent_events', JSON.stringify(next));
+    } catch {}
+  }, [prediction?.id]);
+
   useEffect(() => {
     // 设置页面进入动画状态
     setEntered(true);

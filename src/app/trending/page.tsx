@@ -141,6 +141,28 @@ export default function TrendingPage() {
   // Realtime 订阅状态与过滤信息（用于可视化诊断）
   const [rtStatus, setRtStatus] = useState<string>('INIT');
   const [rtFilter, setRtFilter] = useState<string>('');
+  // 未结算视图模式
+  const [pendingMode, setPendingMode] = useState<'soon' | 'popular'>('soon');
+  // 活动日志（关注/取消关注/访问）
+  const [activityLog, setActivityLog] = useState<Array<{ type: 'follow' | 'unfollow' | 'visit'; id: number; title: string; category: string; ts: string }>>([]);
+
+  function pushActivity(item: { type: 'follow' | 'unfollow' | 'visit'; id: number; title: string; category: string; ts: string }) {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('activity_log') : null;
+      const arr = raw ? JSON.parse(raw) : [];
+      const next = [item, ...(Array.isArray(arr) ? arr : [])].slice(0, 20);
+      window.localStorage.setItem('activity_log', JSON.stringify(next));
+      setActivityLog(next);
+    } catch {}
+  }
+
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('activity_log') : null;
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) setActivityLog(arr);
+    } catch {}
+  }, []);
   
   // 返回顶部功能状态
   const [showBackToTop, setShowBackToTop] = useState(false);
@@ -246,8 +268,14 @@ export default function TrendingPage() {
     try {
       if (wasFollowing) {
         await unfollowPrediction(Number(predictionId), accountNorm);
+        // 记录取消关注活动
+        const p = predictions.find(e => Number(e?.id) === Number(predictionId));
+        pushActivity({ type: 'unfollow', id: Number(predictionId), title: String(p?.title || `事件 #${predictionId}`), category: String(p?.category || ''), ts: new Date().toISOString() });
       } else {
         await followPrediction(Number(predictionId), accountNorm);
+        // 记录关注活动
+        const p = predictions.find(e => Number(e?.id) === Number(predictionId));
+        pushActivity({ type: 'follow', id: Number(predictionId), title: String(p?.title || `事件 #${predictionId}`), category: String(p?.category || ''), ts: new Date().toISOString() });
       }
     } catch (err) {
       console.error('关注/取消关注失败:', err);
@@ -970,6 +998,58 @@ export default function TrendingPage() {
     ? 'bg-yellow-100 text-yellow-700 border-yellow-300'
     : 'bg-gray-100 text-gray-700 border-gray-300';
 
+  const rtDotClass = rtStatus === 'SUBSCRIBED'
+    ? 'bg-green-500'
+    : (rtStatus === 'CHANNEL_ERROR' || rtStatus === 'CLOSED')
+    ? 'bg-red-500'
+    : (rtStatus === 'TIMED_OUT')
+    ? 'bg-yellow-500'
+    : 'bg-gray-400';
+
+  // 近期浏览事件：从 localStorage 读取，展示最近在详情页浏览的事件
+  const [recentViewed, setRecentViewed] = useState<Array<{ id: number; title: string; category: string; seen_at: string }>>([]);
+  const [recentFilter, setRecentFilter] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('recent_events') : null;
+      const arr = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(arr)) {
+        const norm = arr
+          .filter((x: any) => Number.isFinite(Number(x?.id)))
+          .map((x: any) => ({
+            id: Number(x.id),
+            title: String(x.title || ''),
+            category: String(x.category || ''),
+            seen_at: String(x.seen_at || new Date().toISOString())
+          }));
+        setRecentViewed(norm);
+      }
+    } catch {}
+  }, []);
+
+  function formatRelative(iso: string): string {
+    const ts = new Date(iso).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, now - ts);
+    const m = 60 * 1000, h = 60 * m, d = 24 * h;
+    if (diff < m) return '刚刚';
+    if (diff < h) return `${Math.floor(diff / m)} 分钟前`;
+    if (diff < d) return `${Math.floor(diff / h)} 小时前`;
+    return `${Math.floor(diff / d)} 天前`;
+  }
+
+  function formatTimeLeft(deadlineIso?: string): { label: string; dot: string } {
+    if (!deadlineIso) return { label: '未知', dot: 'bg-gray-400' };
+    const end = new Date(deadlineIso).getTime();
+    const now = Date.now();
+    const diff = end - now;
+    const m = 60 * 1000, h = 60 * m, d = 24 * h;
+    if (diff <= 0) return { label: '已到期', dot: 'bg-gray-400' };
+    if (diff < h) return { label: `${Math.ceil(diff / m)} 分钟`, dot: 'bg-red-500' };
+    if (diff < 3 * d) return { label: `${Math.ceil(diff / h)} 小时`, dot: 'bg-yellow-500' };
+    return { label: `${Math.ceil(diff / d)} 天`, dot: 'bg-green-500' };
+  }
+
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-pink-100 via-purple-100 to-pink-50 overflow-hidden text-black">
       <canvas ref={canvasRef} className="absolute inset-0 z-0" />
@@ -977,18 +1057,7 @@ export default function TrendingPage() {
 
       {/* 集成筛选栏 - 搜索、分类筛选、排序一体化 */}
       <div className={`relative z-10 px-16 ${sidebarCollapsed ? "ml-20" : "ml-80"} mt-6`}>
-        {/* Realtime 订阅状态指示（仅用于排查）*/}
-        <div className="flex justify-end mb-2">
-          <span className={`inline-flex items-center gap-2 text-xs px-2 py-1 rounded-full border ${rtBadgeClass}`}>
-            <span className="font-semibold">Realtime:</span>
-            <span>{rtStatus}</span>
-            {rtFilter ? (
-              <span className="ml-1 text-[10px] text-gray-500" title={rtFilter}>
-                {rtFilter}
-              </span>
-            ) : null}
-          </span>
-        </div>
+        {/* Realtime 状态指示已移除 */}
         {/* 搜索栏 */}
         <div className="flex items-center gap-3 bg-white/80 backdrop-blur-sm border border-purple-200 rounded-2xl px-4 py-3 shadow mb-4">
           <Search className="w-5 h-5 text-purple-600" />
@@ -1246,7 +1315,14 @@ export default function TrendingPage() {
         <div className="p-6 border-b border-gray-200/50">
           <div className="flex items-center justify-between">
             {!sidebarCollapsed && (
-              <h2 className="text-xl font-bold text-black">事件导航</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-black">事件导航</h2>
+                <span
+                  className={`inline-block w-2 h-2 rounded-full ${rtDotClass}`}
+                  title={`Realtime: ${rtStatus}`}
+                  aria-label={`Realtime ${rtStatus}`}
+                />
+              </div>
             )}
             <button
               onClick={(e) => {
@@ -1267,38 +1343,180 @@ export default function TrendingPage() {
         {/* 近期浏览事件 */}
         <div className="p-4">
           {!sidebarCollapsed && (
-            <h3 className="text-sm font-semibold text-black mb-3 uppercase tracking-wide">
-              近期浏览事件
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-black uppercase tracking-wide">近期浏览事件</h3>
+              {recentViewed.length > 0 && (
+                <button
+                  onClick={(e) => { try { window.localStorage.removeItem('recent_events'); setRecentViewed([]); } catch {}; createSmartClickEffect(e); }}
+                  className="text-xs px-2 py-1 rounded-full bg-white/60 hover:bg-white text-black border border-gray-200"
+                >清空</button>
+              )}
+            </div>
           )}
           <div className="space-y-2">
-            {sidebarData.recentEvents.map((event, index) => (
+            {recentViewed.length > 0 && !sidebarCollapsed && (() => {
+              const sorted = [...recentViewed].sort((a, b) => new Date(b.seen_at).getTime() - new Date(a.seen_at).getTime());
+              const last = sorted[0];
+              const lastSeenText = formatRelative(last.seen_at);
+              const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+              const count7d = sorted.filter((x) => new Date(x.seen_at).getTime() >= sevenDaysAgo).length;
+              const categoryCounts = new Map<string, number>();
+              for (const x of sorted) {
+                const key = x.category || '未知';
+                categoryCounts.set(key, (categoryCounts.get(key) || 0) + 1);
+              }
+              const uniqueCategories = categoryCounts.size;
+              const topCategory = Array.from(categoryCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '未知';
+              return (
+                <>
+                  
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setRecentFilter(null); createSmartClickEffect(e); }}
+                      className={`text-xs px-2 py-1 rounded-full border ${recentFilter === null ? 'bg-purple-200 text-purple-700 border-transparent' : 'bg-white/60 text-black border-gray-200 hover:bg-white'}`}
+                    >全部</button>
+                    {Array.from(categoryCounts.keys()).map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setRecentFilter(cat); createSmartClickEffect(e); }}
+                        className={`text-xs px-2 py-1 rounded-full border ${recentFilter === cat ? 'bg-purple-200 text-purple-700 border-transparent' : 'bg-white/60 text-black border-gray-200 hover:bg-white'}`}
+                      >{cat}</button>
+                    ))}
+                  </div>
+                  <Link href={`/prediction/${last.id}`}>
+                    <motion.div
+                      className="flex items-center p-3 rounded-xl cursor-pointer transition-all duration-300 hover:bg-white/50 bg-gradient-to-r from-purple-100 to-pink-100 justify-between"
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={(e) => { const color = last.category === '科技' ? '#3B82F6' : last.category === '娱乐' ? '#EC4899' : last.category === '时政' ? '#8B5CF6' : last.category === '天气' ? '#10B981' : '#8B5CF6'; createHeartParticlesForCategory(e.nativeEvent as MouseEvent, color); createSmartClickEffect(e); }}
+                      title="继续浏览上次查看的事件"
+                    >
+                      <div className="flex items-center">
+                        <span className="text-lg">
+                          {last.category === '科技' ? '🚀' : last.category === '娱乐' ? '🎬' : last.category === '时政' ? '🏛️' : last.category === '天气' ? '🌤️' : '📊'}
+                        </span>
+                        <div className="ml-3">
+                          <span className="text-black font-medium block truncate max-w-[12rem]">{last.title}</span>
+                          <span className="text-xs text-gray-600">继续浏览 · {formatRelative(last.seen_at)}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-purple-200 text-purple-700 px-2 py-1 rounded-full">上次</span>
+                        <ChevronRight className="w-4 h-4 text-purple-600" />
+                      </div>
+                    </motion.div>
+                  </Link>
+                </>
+              );
+            })()}
+            {recentViewed.length > 0 ? (() => {
+              const base = [...recentViewed].sort((a, b) => new Date(b.seen_at).getTime() - new Date(a.seen_at).getTime());
+              const filtered = recentFilter ? base.filter((x) => x.category === recentFilter) : base;
+              const take = filtered.slice(0, 6);
+              return take.map((ev) => (
+                <Link key={ev.id} href={`/prediction/${ev.id}`}>
+                  <motion.div
+                    className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-300 hover:bg-white/50 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={(e) => { const color = ev.category === '科技' ? '#3B82F6' : ev.category === '娱乐' ? '#EC4899' : ev.category === '时政' ? '#8B5CF6' : ev.category === '天气' ? '#10B981' : '#8B5CF6'; createHeartParticlesForCategory(e.nativeEvent as MouseEvent, color); createSmartClickEffect(e); }}
+                  >
+                    <div className="flex items-center">
+                      <span className="text-lg">
+                        {ev.category === '科技' ? '🚀' : ev.category === '娱乐' ? '🎬' : ev.category === '时政' ? '🏛️' : ev.category === '天气' ? '🌤️' : '📊'}
+                      </span>
+                      {!sidebarCollapsed && (
+                        <div className="ml-3">
+                          <span className="text-black font-medium block truncate max-w-[12rem]">{ev.title}</span>
+                          <span className="text-xs text-gray-600">{formatRelative(ev.seen_at)}</span>
+                        </div>
+                      )}
+                    </div>
+                    {!sidebarCollapsed && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-purple-100 text-black px-2 py-1 rounded-full">{ev.category || '未知'}</span>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            try {
+                              const next = recentViewed.filter((x) => x.id !== ev.id);
+                              setRecentViewed(next);
+                              if (typeof window !== 'undefined') {
+                                window.localStorage.setItem('recent_events', JSON.stringify(next));
+                              }
+                            } catch {}
+                            createSmartClickEffect(e);
+                          }}
+                          className="text-[11px] px-2 py-1 rounded-full bg-white/60 hover:bg-white border border-gray-200 text-gray-700"
+                          title="从近期浏览移除"
+                        >移除</button>
+                      </div>
+                    )}
+                  </motion.div>
+                </Link>
+              ));
+            })() : null}
+
+            {recentViewed.length === 0 && (
               <motion.div
-                key={event.name}
-                className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-300 hover:bg-white/50 ${
-                  sidebarCollapsed ? "justify-center" : "justify-between"
-                }`}
+                className={`flex items-center p-3 rounded-xl transition-all duration-300 hover:bg-white/50 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
+                title="暂无近期浏览记录"
               >
                 <div className="flex items-center">
-                  <span className="text-lg">{event.icon}</span>
+                  <span className="text-lg">📭</span>
                   {!sidebarCollapsed && (
                     <div className="ml-3">
-                      <span className="text-black font-medium block">
-                        {event.name}
-                      </span>
-                      <span className="text-xs text-gray-600">{event.time}</span>
+                      <span className="text-black font-medium block">无浏览记录</span>
+                      <span className="text-xs text-gray-600">浏览事件后将显示在此处</span>
                     </div>
                   )}
                 </div>
                 {!sidebarCollapsed && (
-                  <span className="text-xs bg-purple-100 text-black px-2 py-1 rounded-full">
-                    {event.category}
-                  </span>
+                  <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">近期浏览</span>
                 )}
               </motion.div>
-            ))}
+            )}
+          </div>
+          {/* 我的活动 */}
+          <div className="mt-4">
+            {!sidebarCollapsed && (
+              <h3 className="text-sm font-semibold text-black mb-2 uppercase tracking-wide">我的活动</h3>
+            )}
+            <div className="space-y-2">
+              {(activityLog.slice(0, 6)).map((act, i) => (
+                <Link key={`${act.id}_${act.ts}_${i}`} href={act.type === 'visit' ? `/prediction/${act.id}` : `/prediction/${act.id}`}>
+                  <motion.div
+                    className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-300 hover:bg-white/50 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    title={act.title}
+                  >
+                    <div className="flex items-center">
+                      <span className="text-lg">
+                        {act.type === 'follow' ? '❤️' : act.type === 'unfollow' ? '💔' : '👀'}
+                      </span>
+                      {!sidebarCollapsed && (
+                        <div className="ml-3">
+                          <span className="text-black font-medium block truncate max-w-[12rem]">
+                            {act.type === 'follow' ? '关注了 ' : act.type === 'unfollow' ? '取消关注 ' : '浏览了 '}{act.title}
+                          </span>
+                          <span className="text-xs text-gray-600">{formatRelative(act.ts)}</span>
+                        </div>
+                      )}
+                    </div>
+                    {!sidebarCollapsed && (
+                      <span className="text-xs bg-purple-100 text-black px-2 py-1 rounded-full">{act.category || '事件'}</span>
+                    )}
+                  </motion.div>
+                </Link>
+              ))}
+              {activityLog.length === 0 && (
+                <div className="text-xs text-gray-600 px-3 py-2">暂无活动记录</div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1316,6 +1534,7 @@ export default function TrendingPage() {
               }`}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
+              title={`我的关注（${followedEvents.size}）`}
             >
               <div className="flex items-center">
                 <Heart className="w-5 h-5 text-purple-600" />
@@ -1329,49 +1548,122 @@ export default function TrendingPage() {
                 )}
               </div>
               {!sidebarCollapsed && (
-                <ChevronRight className="w-4 h-4 text-purple-600" />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs bg-purple-200 text-purple-700 px-2 py-1 rounded-full">
+                    {followedEvents.size} 项
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-purple-600" />
+                </div>
               )}
             </motion.div>
           </Link>
         </div>
 
-        {/* 未结算事件 */}
+        {/* 快捷筛选 */}
         <div className="p-4 border-t border-gray-200/50">
           {!sidebarCollapsed && (
-            <h3 className="text-sm font-semibold text-black mb-3 uppercase tracking-wide">
-              未结算事件
-            </h3>
+            <h3 className="text-sm font-semibold text-black mb-3 uppercase tracking-wide">快捷筛选</h3>
+          )}
+          <div className={`grid ${sidebarCollapsed ? 'grid-cols-1' : 'grid-cols-2'} gap-2`}>
+            <motion.button
+              onClick={(e) => { setSelectedCategory(""); productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); createSmartClickEffect(e); }}
+              className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} p-2 rounded-xl border transition-all duration-300 ${selectedCategory === "" ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white border-white/40' : 'bg-white/50 text-black border-gray-200 hover:bg-white/70'}`}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              aria-label="筛选 全部"
+            >
+              <ChevronsUpDown className="w-4 h-4" />
+              {!sidebarCollapsed && (
+                <span className="text-sm font-medium">全部</span>
+              )}
+              {!sidebarCollapsed && (
+                <span className="text-xs text-gray-600">{sortedEvents.length} 个</span>
+              )}
+            </motion.button>
+
+            {categories.map((cat) => (
+              <motion.button
+                key={cat.name}
+                onClick={(e) => { setSelectedCategory(cat.name); productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); createSmartClickEffect(e); }}
+                className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} p-2 rounded-xl border transition-all duration-300 ${selectedCategory === cat.name ? 'bg-gradient-to-r ' + cat.color + ' text-white border-white/40' : 'bg-white/50 text-black border-gray-200 hover:bg-white/70'}`}
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                aria-label={`筛选 ${cat.name}`}
+                title={cat.name}
+              >
+                <span className="text-lg">{cat.icon}</span>
+                {!sidebarCollapsed && (
+                  <span className="text-sm font-medium">{cat.name}</span>
+                )}
+                {!sidebarCollapsed && (
+                  <span className="text-xs text-gray-600">{categoryCounts[cat.name] || 0} 个</span>
+                )}
+              </motion.button>
+            ))}
+          </div>
+        </div>
+
+        {/* 未结算事件（依据真实数据） */}
+        <div className="p-4 border-t border-gray-200/50">
+          {!sidebarCollapsed && (
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-black uppercase tracking-wide">未结算事件</h3>
+              <div className="flex items-center gap-2 bg-white/60 border border-gray-200 rounded-full p-1">
+                <button
+                  onClick={(e) => { setPendingMode('soon'); createSmartClickEffect(e); }}
+                  className={`text-xs px-2 py-1 rounded-full ${pendingMode === 'soon' ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' : 'text-black hover:bg-white'}`}
+                >临近截止</button>
+                <button
+                  onClick={(e) => { setPendingMode('popular'); createSmartClickEffect(e); }}
+                  className={`text-xs px-2 py-1 rounded-full ${pendingMode === 'popular' ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' : 'text-black hover:bg-white'}`}
+                >关注最多</button>
+              </div>
+            </div>
           )}
           <div className="space-y-3">
-            {sidebarData.trendingPredictions.map((prediction, index) => (
-              <motion.div
-                key={prediction.name}
-                className={`flex items-center p-3 rounded-xl bg-white/30 backdrop-blur-sm cursor-pointer transition-all duration-300 ${
-                  sidebarCollapsed ? "justify-center" : "justify-between"
-                }`}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                <div className="flex items-center">
-                  <TrendingUp className="w-4 h-4 text-black" />
-                  {!sidebarCollapsed && (
-                    <div className="ml-3">
-                      <p className="text-sm font-medium text-black">
-                        {prediction.name}
-                      </p>
-                      <p className="text-xs text-black">{prediction.volume}</p>
-                    </div>
-                  )}
-                </div>
-                {!sidebarCollapsed && (
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      prediction.trend === "up" ? "bg-green-500" : "bg-red-500"
-                    }`}
-                  />
-                )}
-              </motion.div>
-            ))}
+            {(pendingMode === 'soon'
+              ? predictions
+                  .filter(p => (p?.status || 'active') === 'active')
+                  .sort((a, b) => new Date(a?.deadline || 0).getTime() - new Date(b?.deadline || 0).getTime())
+              : predictions
+                  .filter(p => (p?.status || 'active') === 'active')
+                  .sort((a, b) => Number(b?.followers_count || 0) - Number(a?.followers_count || 0))
+            )
+              .slice(0, 6)
+              .map((p) => {
+                const tl = formatTimeLeft(String(p?.deadline || ''));
+                const lineColor = (tl.dot || 'bg-gray-400').replace('bg-', 'text-');
+                return (
+                  <Link key={p.id} href={`/prediction/${p.id}`}>
+                    <motion.div
+                      className={`flex items-center p-3 rounded-xl cursor-pointer transition-all duration-300 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <div className="flex items-center">
+                        <div className={`${tl.dot} w-1 h-6 rounded mr-2`} />
+                        <TrendingUp className={`w-4 h-4 ${tl.dot.replace('bg-', 'text-')}`} />
+                        {!sidebarCollapsed && (
+                          <div className="ml-3">
+                            <p className="text-sm font-medium text-black truncate max-w-[12rem]">{p.title}</p>
+                            {pendingMode === 'soon' ? (
+                              <p className="text-xs text-black">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full mr-2 ${tl.dot === 'bg-red-500' ? 'bg-red-500/20 text-red-600' : tl.dot === 'bg-yellow-500' ? 'bg-yellow-500/20 text-yellow-600' : tl.dot === 'bg-green-500' ? 'bg-green-500/20 text-green-600' : 'bg-gray-400/20 text-gray-600'}`}>剩余 {tl.label}</span>
+                                · {Number(p?.followers_count || 0)} 人关注
+                              </p>
+                            ) : (
+                              <p className="text-xs text-black">{Number(p?.followers_count || 0)} 人关注 · 截止 {new Date(p?.deadline || Date.now()).toLocaleDateString()}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {!sidebarCollapsed && (
+                        <div className={`w-2 h-2 rounded-full ${tl.dot} ${(tl.dot || '').includes('bg-red-500') ? 'animate-pulse' : ''}`} />
+                      )}
+                    </motion.div>
+                  </Link>
+                );
+              })}
           </div>
         </div>
 
@@ -1388,13 +1680,25 @@ export default function TrendingPage() {
                 sidebarCollapsed ? "justify-center" : "justify-between"
               }`}
             >
-              <Shield className="w-4 h-4 text-black" />
+              <BarChart3 className="w-4 h-4 text-black" />
               {!sidebarCollapsed && (
                 <div className="ml-3">
-                  <p className="text-sm font-medium text-black">总投保金额</p>
-                  <p className="text-xs text-black">
-                    {sidebarData.platformStats.totalInsured} USDT
-                  </p>
+                  <p className="text-sm font-medium text-black">事件总数</p>
+                  <p className="text-xs text-black">1,234</p>
+                </div>
+              )}
+            </div>
+
+            <div
+              className={`flex items-center p-3 rounded-xl bg-gradient-to-r from-purple-100 to-pink-100 ${
+                sidebarCollapsed ? "justify-center" : "justify-between"
+              }`}
+            >
+              <TrendingUp className="w-4 h-4 text-black" />
+              {!sidebarCollapsed && (
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-black">活跃事件</p>
+                  <p className="text-xs text-black">876</p>
                 </div>
               )}
             </div>
@@ -1407,26 +1711,18 @@ export default function TrendingPage() {
               <Users className="w-4 h-4 text-black" />
               {!sidebarCollapsed && (
                 <div className="ml-3">
-                  <p className="text-sm font-medium text-black">活跃用户</p>
-                  <p className="text-xs text-black">
-                    {sidebarData.platformStats.activeUsers}
-                  </p>
+                  <p className="text-sm font-medium text-black">累计关注数</p>
+                  <p className="text-xs text-black">12,540</p>
                 </div>
               )}
             </div>
 
-            <div
-              className={`flex items-center p-3 rounded-xl bg-gradient-to-r from-purple-100 to-pink-100 ${
-                sidebarCollapsed ? "justify-center" : "justify-between"
-              }`}
-            >
-              <BarChart3 className="w-4 h-4 text-black" />
+            <div className={`flex items-center p-3 rounded-xl bg-gradient-to-r from-purple-100 to-pink-100 ${sidebarCollapsed ? "justify-center" : "justify-between"}`}>
+              <Flame className="w-4 h-4 text-red-600" />
               {!sidebarCollapsed && (
                 <div className="ml-3">
-                  <p className="text-sm font-medium text-black">已赔付金额</p>
-                  <p className="text-xs text-black">
-                    {sidebarData.platformStats.claimsPaid} USDT
-                  </p>
+                  <p className="text-sm font-medium text-black">24小时新增事件</p>
+                  <p className="text-xs text-black">18</p>
                 </div>
               )}
             </div>

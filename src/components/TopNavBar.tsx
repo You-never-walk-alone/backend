@@ -351,12 +351,19 @@ export default function TopNavBar() {
         >
           Creating
         </Link>
-        <a className="text-black hover:text-black" href="#">
-          Free
-        </a>
-        <a className="text-black hover:text-black" href="#">
-          VIP
-        </a>
+        {/* 替换 Free/VIP 为“我的关注”入口 */}
+        <Link
+          className="text-black hover:text-black"
+          href="/my-follows"
+          aria-current={pathname === "/my-follows" ? "page" : undefined}
+          style={
+            pathname === "/my-follows"
+              ? { color: "rgba(107, 33, 168, 1)" }
+              : undefined
+          }
+        >
+          我的关注
+        </Link>
         <a className="text-black hover:text-black" href="#">
           Sigin in
         </a>

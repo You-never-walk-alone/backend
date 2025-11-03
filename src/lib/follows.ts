@@ -33,7 +33,8 @@ export async function getFollowStatus(
   predictionId: number,
   walletAddress?: string
 ): Promise<FollowStatus> {
-  const qs = buildQuery({ predictionId, walletAddress })
+  const addr = walletAddress ? walletAddress.toLowerCase() : undefined
+  const qs = buildQuery({ predictionId, walletAddress: addr })
   const res = await fetch(`/api/follows?${qs}`, { method: 'GET', cache: 'no-store' })
   if (!res.ok) {
     const errBody = await parseJson<ApiErrorBody>(res)
@@ -47,7 +48,7 @@ export async function followPrediction(
   predictionId: number,
   walletAddress: string
 ): Promise<void> {
-  const params = new URLSearchParams({ predictionId: String(predictionId), walletAddress })
+  const params = new URLSearchParams({ predictionId: String(predictionId), walletAddress: walletAddress.toLowerCase() })
   const res = await fetch('/api/follows', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -63,7 +64,7 @@ export async function unfollowPrediction(
   predictionId: number,
   walletAddress: string
 ): Promise<void> {
-  const params = new URLSearchParams({ predictionId: String(predictionId), walletAddress })
+  const params = new URLSearchParams({ predictionId: String(predictionId), walletAddress: walletAddress.toLowerCase() })
   const res = await fetch('/api/follows', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

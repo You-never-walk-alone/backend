@@ -16,11 +16,27 @@ function isUserIdForeignKeyViolation(error?: { message?: string }) {
   return msg.includes('violates foreign key constraint') && msg.includes('event_follows_user_id_fkey')
 }
 
+// Helper: detect event_id → predictions(id) foreign key violation
+function isEventIdForeignKeyViolation(error?: { message?: string }) {
+  if (!error?.message) return false
+  const msg = error.message.toLowerCase()
+  // 默认约束名为 event_follows_event_id_fkey；兼容部分环境错误信息仅提到 predictions
+  return msg.includes('violates foreign key constraint') && (msg.includes('event_follows_event_id_fkey') || msg.includes('predictions'))
+}
+
 // Helper: detect integer type mismatch on user_id column
 function isUserIdTypeIntegerError(error?: { message?: string }) {
   if (!error?.message) return false
   const msg = error.message.toLowerCase()
   return msg.includes('out of range for type integer') || msg.includes('invalid input syntax for type integer')
+}
+
+// 地址规范化与校验
+function normalizeWalletAddress(addr?: string): string | null {
+  const s = String(addr || '').trim()
+  if (!s) return null
+  if (/^0x[a-fA-F0-9]{40}$/.test(s)) return s.toLowerCase()
+  return null
 }
 
 // 取消所有本地降级，仅使用 Supabase
@@ -71,7 +87,7 @@ export async function POST(req: Request) {
     }
     const body = await parseRequestBody(req)
     const predictionId = Number(body?.predictionId)
-    const walletAddress = String(body?.walletAddress || '')
+    const walletAddress = normalizeWalletAddress(String(body?.walletAddress || ''))
 
     if (!predictionId || !walletAddress) {
       return NextResponse.json({ message: 'predictionId 与 walletAddress 必填' }, { status: 400 })
@@ -80,11 +96,13 @@ export async function POST(req: Request) {
     // 首先尝试插入（若缺表或结构错误按策略处理）
     const { data, error } = await supabaseAdmin
       .from('event_follows')
-      .insert({ user_id: walletAddress, event_id: predictionId })
+      .upsert({ user_id: walletAddress, event_id: predictionId }, { onConflict: 'user_id,event_id' })
       .select()
       .maybeSingle()
 
     if (error) {
+      // 记录未分类错误，便于诊断（出现在开发服务器终端）
+      try { console.error('POST /api/follows upsert error', { predictionId, walletAddress, message: error?.message }) } catch {}
       if (isMissingRelation(error) || isUserIdForeignKeyViolation(error) || isUserIdTypeIntegerError(error)) {
         // 明确给出修复指引
         if (isMissingRelation(error)) {
@@ -126,6 +144,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS event_follows_user_id_event_id_key ON public.e
           }, { status: 501 })
         }
       }
+      // 针对 event_id 外键冲突返回明确的 400
+      if (isEventIdForeignKeyViolation(error)) {
+        return NextResponse.json({
+          message: 'predictionId 无效，预测事件不存在或已删除（外键）',
+          detail: error.message
+        }, { status: 400 })
+      }
       return NextResponse.json({ message: '关注失败', detail: error.message }, { status: 500 })
     }
 
@@ -146,7 +171,7 @@ export async function DELETE(req: Request) {
     }
     const body = await parseRequestBody(req)
     const predictionId = Number(body?.predictionId)
-    const walletAddress = String(body?.walletAddress || '')
+    const walletAddress = normalizeWalletAddress(String(body?.walletAddress || ''))
 
     if (!predictionId || !walletAddress) {
       return NextResponse.json({ message: 'predictionId 与 walletAddress 必填' }, { status: 400 })
@@ -213,7 +238,7 @@ export async function GET(req: Request) {
     }
     const { searchParams } = new URL(req.url)
     const predictionId = Number(searchParams.get('predictionId'))
-    const walletAddress = String(searchParams.get('walletAddress') || '')
+    const walletAddress = normalizeWalletAddress(String(searchParams.get('walletAddress') || ''))
 
     if (!predictionId) {
       return NextResponse.json({ message: 'predictionId 必填' }, { status: 400 })

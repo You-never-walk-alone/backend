@@ -217,15 +217,17 @@ export default function PredictionDetailPage() {
     setFollowError(null);
 
     try {
-      const newFollowing = await toggleFollowPrediction(following, Number(params.id), account);
+      const addr = account.toLowerCase();
+      const newFollowing = await toggleFollowPrediction(following, Number(params.id), addr);
       setFollowing(newFollowing);
       
       // 重新获取关注数量
-      const status = await getFollowStatus(Number(params.id), account);
+      const status = await getFollowStatus(Number(params.id), addr);
       setFollowersCount(status.followersCount);
     } catch (error) {
       console.error('关注操作失败:', error);
-      setFollowError('操作失败，请重试');
+      const msg = error instanceof Error ? (error.message || '操作失败，请重试') : '操作失败，请重试';
+      setFollowError(msg);
     } finally {
       setFollowLoading(false);
     }

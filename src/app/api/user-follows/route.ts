@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
+import { supabaseAdmin, supabase } from '@/lib/supabase'
 
 function isMissingRelation(error?: { message?: string }) {
   if (!error?.message) return false
@@ -21,6 +21,7 @@ function isUserIdTypeIntegerError(error?: { message?: string }) {
 
 export async function GET(request: NextRequest) {
   try {
+    const client = supabaseAdmin || supabase
     const { searchParams } = new URL(request.url)
     const address = searchParams.get('address')
 
@@ -32,16 +33,14 @@ export async function GET(request: NextRequest) {
     }
 
     // 获取用户关注的事件ID列表（仅 Supabase）
-    const { data: followedEventIds, error: followsError } = await supabaseAdmin
+    const { data: followedEventIds, error: followsError } = await client
       .from('event_follows')
       .select('event_id')
       .eq('user_id', address)
     
+    // 若在匿名模式下受RLS限制，返回空结果而非报错
     if (followsError) {
-      return NextResponse.json(
-        { error: '获取关注事件ID失败' },
-        { status: 500 }
-      )
+      return NextResponse.json({ follows: [], total: 0 })
     }
 
     const eventIds: number[] = (followedEventIds || []).map(follow => follow.event_id)
@@ -50,7 +49,7 @@ export async function GET(request: NextRequest) {
     }
 
     // 获取事件详细信息
-    const { data: eventsData, error: eventsError } = await supabaseAdmin
+    const { data: eventsData, error: eventsError } = await client
       .from('predictions')
       .select(`
         id,
@@ -67,16 +66,13 @@ export async function GET(request: NextRequest) {
       .order('created_at', { ascending: false })
 
     if (eventsError) {
-      return NextResponse.json(
-        { error: '获取事件详细信息失败' },
-        { status: 500 }
-      )
+      return NextResponse.json({ follows: [], total: 0 })
     }
 
     // 获取每个事件的关注数（仅 Supabase；出现错误时该事件计数置为 0）
     const eventsWithFollowersCount = await Promise.all(
       (eventsData || []).map(async (event) => {
-        const { count, error: countError } = await supabaseAdmin
+        const { count, error: countError } = await client
           .from('event_follows')
           .select('id', { count: 'exact', head: true })
           .eq('event_id', event.id)

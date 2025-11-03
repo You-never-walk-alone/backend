@@ -1,11 +1,12 @@
 // 分类热点数量API路由 - 获取每个分类的预测事件数量
 import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/supabase';
 
 export async function GET() {
   try {
+    const client = supabaseAdmin || supabase;
     // 使用Supabase查询每个分类的预测事件数量（只统计活跃状态的事件）
-    const { data: categories, error: categoriesError } = await supabaseAdmin
+    const { data: categories, error: categoriesError } = await client
       .from('categories')
       .select('name');
     
@@ -17,7 +18,7 @@ export async function GET() {
     const categoryCounts = [];
     
     for (const category of categories) {
-      const { data: predictions, error: predictionsError } = await supabaseAdmin
+      const { data: predictions, error: predictionsError } = await client
         .from('predictions')
         .select('id')
         .eq('category', category.name)

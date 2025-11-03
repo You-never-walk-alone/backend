@@ -71,7 +71,7 @@ export default function MyFollowsPage() {
       setLoading(true);
       setError(null);
       
-      const response = await fetch(`/api/user-follows?address=${account}`);
+      const response = await fetch(`/api/user-follows?address=${account.toLowerCase()}`);
       if (!response.ok) {
         throw new Error("获取关注数据失败");
       }
@@ -98,7 +98,7 @@ export default function MyFollowsPage() {
         },
         body: JSON.stringify({
           predictionId: Number(eventId),
-          walletAddress: account,
+          walletAddress: account.toLowerCase(),
         }),
       });
 

@@ -1,6 +1,6 @@
 // 预测事件API路由 - 处理GET和POST请求
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin, type Prediction } from '@/lib/supabase';
+import { supabaseAdmin, supabase, type Prediction } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,8 +12,11 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status');
     const limit = searchParams.get('limit');
 
+    // 在缺少服务密钥时使用匿名客户端降级读取
+    const client = supabaseAdmin || supabase;
+
     // 构建Supabase查询
-    let query = supabaseAdmin
+    let query = client
       .from('predictions')
       .select('*')
       .order('created_at', { ascending: false });
@@ -34,20 +37,21 @@ export async function GET(request: NextRequest) {
     
     const { data: predictions, error } = await query;
     
-    // 获取每个预测的关注数量
+    // 获取每个预测的关注数量（在缺少服务密钥时尝试匿名读取，失败则将计数置为0）
     let predictionsWithFollowersCount = [];
     if (!error && predictions) {
       predictionsWithFollowersCount = await Promise.all(
         predictions.map(async (prediction) => {
           // 获取关注数量
-          const { count, error: countError } = await supabaseAdmin
+          const countClient = supabaseAdmin || supabase;
+          const { count, error: countError } = await countClient
             .from('event_follows')
-            .select('*', { count: 'exact', head: true })
+            .select('id', { count: 'exact', head: true })
             .eq('event_id', prediction.id);
           
           return {
             ...prediction,
-            followers_count: count || 0
+            followers_count: countError ? 0 : (count || 0)
           };
         })
       );
